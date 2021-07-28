@@ -1,0 +1,69 @@
+process.env['NODE_TLS_REJECT_UNAUTHORIZED'] = 0
+const { CertificateRevocationList } = require('pkijs');
+let asn1 = require('asn1js'),
+        pkijs = require('pkijs'),
+        pvutils = require('pvutils'),
+        fs = require('fs');
+var os = require('os'),
+    l = require('@chilkat/ck-node14-linux64'),
+    c = new l.Cert(),
+    request = require('request');
+
+var serialNo;
+
+
+function readCDPFromCert() {      
+    var s = c.LoadFromFile("../yourPEMfile.pem");
+    var ex = c.GetExtensionAsXml("2.5.29.31");
+    serialNo = c.SerialNumber
+    var xml = new l.Xml();
+    xml.LoadXml(ex);
+    var CDP = new l.StringBuilder();
+    s = xml.GetChildContentSb("sequence|contextSpecific|contextSpecific|contextSpecific",CDP);
+    if (s) {
+        CDP.Decode("base64","utf-8");
+        //console.log(CDP.GetAsString());
+    }
+    return CDP.GetAsString()
+}
+
+function retrieveandValidateCRL(link) {
+    
+    var options = {
+        'method': 'GET',
+        'url': link,
+    };
+    request(options, function (error, response) {
+    if (error) throw new Error(error);
+    checkCRLData(response.body, serialNo)
+    });
+}
+
+
+function checkCRLData(pem, serialNo) {
+
+    const asn1js = require('asn1js');    
+    const strippedCRL = pem.replace(/(-----(BEGIN|END) X509 CRL-----|\n)/g, '');
+    let cer = Buffer.from(strippedCRL, 'base64');
+    let ber = new Uint8Array(cer).buffer;
+    asn1 = asn1js.fromBER(ber);
+    const crlInfo = new CertificateRevocationList({ schema: asn1.result });
+    for (const { userCertificate } of crlInfo.revokedCertificates) {
+        let currSno = pvutils.bufferToHexCodes(userCertificate.valueBlock.valueHex);
+        if (serialNo == currSno) {
+            console.log("\n\nCERTIFICATE : " + currSno + " ID REVOKED BY ISSUER\n\n")
+        } else {
+            //console.log("Provided Certificate " + currSno + " is not present in CRL of Issuer")
+        }
+       
+    }
+}
+
+function main() {
+    //Decode CRL URL from cert
+    var link = readCDPFromCert();
+    //Retrive CRL List from URL
+    retrieveandValidateCRL(link) 
+}
+
+main()
